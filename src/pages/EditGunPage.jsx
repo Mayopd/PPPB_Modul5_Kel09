@@ -8,6 +8,8 @@ import {
   Save,
   CheckCircle,
   AlertCircle,
+  Images,
+  Star,
 } from 'lucide-react'
 import gunService from '../services/gunService'
 import uploadService from '../services/uploadService'
@@ -22,8 +24,7 @@ import {
 import ConfirmModal from '../components/modals/ConfirmModal'
 
 /**
- * EditGunPage — Edit an existing weapon / hardware item.
- * Supports updating specs, steps, image replacement, and draft management.
+ * EditGunPage — Edit an existing hardware record with multi-image support (Challenge 9).
  */
 export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
   const targetId = gunId || gun?.id
@@ -45,9 +46,8 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
     is_featured: false,
   })
 
-  const [currentImageUrl, setCurrentImageUrl] = useState('')
-  const [imageFile, setImageFile] = useState(null)
-  const [imagePreview, setImagePreview] = useState(null)
+  // Multi-image state (Challenge 9)
+  const [images, setImages] = useState([])
   const [uploading, setUploading] = useState(false)
 
   // Specs & Steps
@@ -65,7 +65,6 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
         setLoading(true)
         setError('')
 
-        // If gun was passed directly and has full details, use it; else fetch from API
         let data = gun
         if (!data || !data.ingredients || !data.steps) {
           if (targetId && !String(targetId).startsWith('local-')) {
@@ -88,7 +87,12 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
             servings: data.servings || 1,
             is_featured: Boolean(data.is_featured),
           })
-          setCurrentImageUrl(data.image_url || data.image || '/guns/pistol.svg')
+
+          const initImages =
+            data.images && data.images.length > 0
+              ? data.images
+              : [data.image_url || data.image || '/guns/pistol.svg']
+          setImages(initImages)
 
           if (data.ingredients && data.ingredients.length > 0) {
             setSpecs(data.ingredients.map((ing) => ({
@@ -107,7 +111,6 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
           } else {
             setSteps(['Standard manufacturer maintenance and cleaning protocol.'])
           }
-
         } else {
           setError('Hardware record could not be loaded.')
         }
@@ -121,8 +124,7 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
     if (targetId) {
       fetchGun()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId])
+  }, [targetId, gun])
 
   // Draft operations
   const handleLoadDraft = () => {
@@ -131,9 +133,7 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       if (draft.formData) setFormData(draft.formData)
       if (draft.specs) setSpecs(draft.specs)
       if (draft.steps) setSteps(draft.steps)
-      if (draft.imagePreview) {
-        setImagePreview(draft.imagePreview)
-      }
+      if (draft.images) setImages(draft.images)
       setShowDraftModal(false)
       setSuccessMsg('Saved draft restored.')
       setTimeout(() => setSuccessMsg(''), 3000)
@@ -151,7 +151,8 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       formData,
       specs,
       steps,
-      imagePreview: imagePreview || currentImageUrl,
+      images,
+      savedAt: new Date().toISOString(),
     }
     const saved = saveDraft(draftData, targetId)
     if (saved) {
@@ -162,47 +163,57 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
     }
   }
 
-  // Handle new image file
-  const handleImageChange = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
+  // Handle multiple image uploads
+  const handleMultipleFiles = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File size exceeds 5MB limit.')
-      return
-    }
-
-    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-    if (!allowed.includes(file.type)) {
-      setError('Allowed formats: .jpg, .jpeg, .png, .webp')
-      return
-    }
-
-    setImageFile(file)
-    setImagePreview(URL.createObjectURL(file))
+    setUploading(true)
     setError('')
+
+    const newUrls = []
+    for (const file of files) {
+      if (file.size > 5 * 1024 * 1024) {
+        setError(`File "${file.name}" exceeds 5MB limit.`)
+        continue
+      }
+      try {
+        const res = await uploadService.uploadImage(file)
+        if (res.success && res.data?.url) {
+          newUrls.push(res.data.url)
+        }
+      } catch (err) {
+        console.warn('Upload error:', err)
+      }
+    }
+
+    if (newUrls.length > 0) {
+      setImages((prev) => [...prev, ...newUrls])
+      setSuccessMsg(`${newUrls.length} image(s) added.`)
+      setTimeout(() => setSuccessMsg(''), 3000)
+    }
+    setUploading(false)
   }
 
-  const handleUploadNewImage = async () => {
-    if (!imageFile) return
-    try {
-      setUploading(true)
-      const res = await uploadService.uploadImage(imageFile)
-      if (res.success && res.data?.url) {
-        setCurrentImageUrl(res.data.url)
-        setImageFile(null)
-        setImagePreview(null)
-        setSuccessMsg('New image uploaded successfully.')
-        setTimeout(() => setSuccessMsg(''), 3000)
-      }
-    } catch (err) {
-      console.warn('Image upload failed, using local blob:', err)
-      setCurrentImageUrl(imagePreview)
-      setImageFile(null)
-      setImagePreview(null)
-    } finally {
-      setUploading(false)
+  const handleAddPreset = (url) => {
+    setImages((prev) => [...prev, url])
+  }
+
+  const handleRemoveImage = (index) => {
+    if (images.length <= 1) {
+      setError('At least one image must remain.')
+      setTimeout(() => setError(''), 3000)
+      return
     }
+    setImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleSetPrimary = (index) => {
+    setImages((prev) => {
+      const copy = [...prev]
+      const [chosen] = copy.splice(index, 1)
+      return [chosen, ...copy]
+    })
   }
 
   // Specs & Steps
@@ -265,6 +276,8 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       return
     }
 
+    const finalImages = images.length > 0 ? images : ['/guns/pistol.svg']
+
     const payload = {
       name: formData.name.trim(),
       type: formData.type || (formData.category === 'minuman' ? 'Rifle' : 'Pistol'),
@@ -272,7 +285,8 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       price: Number(formData.price) || 500,
       category: formData.category || 'makanan',
       description: formData.description.trim() || `${formData.type} caliber ${formData.caliber}.`,
-      image_url: imagePreview || currentImageUrl || '/guns/pistol.svg',
+      images: finalImages,
+      image_url: finalImages[0],
       prep_time: 15,
       cook_time: Number(formData.price) || 500,
       servings: Number(formData.servings) || 1,
@@ -287,11 +301,8 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       const res = await gunService.updateGun(targetId, payload)
       if (res.success || res.data) {
         deleteDraft(targetId)
-        if (onSuccess) {
-          onSuccess(res.data)
-        } else if (onBack) {
-          onBack()
-        }
+        if (onSuccess) onSuccess(res.data)
+        else if (onBack) onBack()
       } else {
         throw new Error(res.message || 'Failed to update record on server.')
       }
@@ -313,7 +324,6 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
 
   return (
     <div className="form-page">
-      {/* Head */}
       <div className="form-head">
         <button type="button" className="detail-back" onClick={onBack}>
           <ArrowLeft size={18} /> Back
@@ -347,45 +357,142 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
       )}
 
       <form onSubmit={handleSubmit} className="entry-form">
-        {/* Imagery Section */}
+        {/* Multi-Image Management (Challenge 9) */}
         <div className="card-box">
-          <h2 className="card-box-title">Visual Asset</h2>
-          <div className="edit-img-wrap">
-            <img
-              src={imagePreview || currentImageUrl}
-              alt="Current hardware"
-              className="edit-current-img"
-            />
-            <div className="edit-img-controls">
-              <input
-                id="edit-gun-image"
-                type="file"
-                accept="image/jpeg,image/jpg,image/png,image/webp"
-                onChange={handleImageChange}
-                className="hidden-file-input"
-              />
-              <label htmlFor="edit-gun-image" className="btn btn--outline btn--sm">
-                <Upload size={14} /> Select New Image File
-              </label>
+          <h2 className="card-box-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Images size={20} color="var(--brass, #c5a059)" />
+            Weapon Visual Assets ({images.length} images)
+          </h2>
 
-              {imageFile && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '12px', marginTop: '14px' }}>
+            {images.map((imgUrl, idx) => (
+              <div
+                key={idx}
+                style={{
+                  position: 'relative',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: idx === 0 ? '2px solid var(--brass, #c5a059)' : '1px solid var(--line, #333)',
+                  background: 'rgba(0,0,0,0.3)',
+                  height: '110px',
+                }}
+              >
+                <img
+                  src={imgUrl}
+                  alt={`Hardware ${idx + 1}`}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '6px' }}
+                />
+
+                {idx === 0 && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '4px',
+                      left: '4px',
+                      background: 'var(--brass, #c5a059)',
+                      color: '#111',
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      padding: '1px 5px',
+                      borderRadius: '3px',
+                    }}
+                  >
+                    Primary
+                  </span>
+                )}
+
                 <button
                   type="button"
-                  className="btn btn--primary btn--sm"
-                  onClick={handleUploadNewImage}
-                  disabled={uploading}
+                  onClick={() => handleRemoveImage(idx)}
+                  style={{
+                    position: 'absolute',
+                    top: '4px',
+                    right: '4px',
+                    background: 'rgba(224, 82, 82, 0.85)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '50%',
+                    width: '22px',
+                    height: '22px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                  title="Remove image"
                 >
-                  {uploading ? (
-                    <>
-                      <Loader size={14} className="spin" /> Uploading…
-                    </>
-                  ) : (
-                    'Upload to MinIO'
-                  )}
+                  <X size={13} />
                 </button>
-              )}
-            </div>
+
+                {idx !== 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleSetPrimary(idx)}
+                    style={{
+                      position: 'absolute',
+                      bottom: '4px',
+                      left: '4px',
+                      right: '4px',
+                      background: 'rgba(0,0,0,0.75)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '3px',
+                      fontSize: '0.65rem',
+                      padding: '2px 0',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '3px',
+                    }}
+                  >
+                    <Star size={10} color="var(--brass)" /> Set Primary
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
+
+          <div style={{ marginTop: '16px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              id="edit-multi-file"
+              type="file"
+              multiple
+              accept="image/jpeg,image/jpg,image/png,image/webp"
+              onChange={handleMultipleFiles}
+              style={{ display: 'none' }}
+            />
+            <label htmlFor="edit-multi-file" className="btn btn--outline btn--sm" style={{ cursor: 'pointer' }}>
+              <Upload size={14} /> Add More Images (Multiple)
+            </label>
+
+            <button
+              type="button"
+              className="btn btn--outline btn--sm"
+              onClick={() => handleAddPreset('/guns/pistol.svg')}
+            >
+              + Pistol Preset
+            </button>
+            <button
+              type="button"
+              className="btn btn--outline btn--sm"
+              onClick={() => handleAddPreset('/guns/rifle.svg')}
+            >
+              + Rifle Preset
+            </button>
+            <button
+              type="button"
+              className="btn btn--outline btn--sm"
+              onClick={() => handleAddPreset('/guns/shotgun.svg')}
+            >
+              + Shotgun Preset
+            </button>
+          </div>
+          {uploading && (
+            <p style={{ margin: '8px 0 0 0', fontSize: '0.85rem', color: 'var(--brass)' }}>
+              <Loader size={14} className="spin" /> Uploading image files…
+            </p>
+          )}
         </div>
 
         {/* Core fields */}
@@ -561,21 +668,6 @@ export default function EditGunPage({ gun, gunId, onBack, onSuccess }) {
               </div>
             ))}
           </div>
-        </div>
-
-        {/* Featured */}
-        <div className="checkbox-row">
-          <input
-            id="edit-is-featured"
-            type="checkbox"
-            name="is_featured"
-            checked={formData.is_featured}
-            onChange={(e) => setFormData((p) => ({ ...p, is_featured: e.target.checked }))}
-            className="form-checkbox"
-          />
-          <label htmlFor="edit-is-featured" className="checkbox-label">
-            Feature in Armory Showcase
-          </label>
         </div>
 
         {/* Submit */}

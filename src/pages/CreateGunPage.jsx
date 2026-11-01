@@ -8,6 +8,8 @@ import {
   Save,
   CheckCircle,
   AlertCircle,
+  Images,
+  Star,
 } from 'lucide-react'
 import gunService from '../services/gunService'
 import uploadService from '../services/uploadService'
@@ -22,43 +24,43 @@ import {
 import ConfirmModal from '../components/modals/ConfirmModal'
 
 /**
- * CreateGunPage — Create a new weapon / hardware item with image upload,
- * draft persistence (auto-save), specs, and assembly steps.
+ * CreateGunPage — Register new hardware with:
+ * - Multi-image upload & management (Challenge 9)
+ * - Auto-saving drafts (Challenge 5)
+ * - Specs and assembly protocols
  */
 export default function CreateGunPage({ onBack, onSuccess }) {
-  // Step state: 'upload' (upload or choose image) or 'form' (enter details)
   const [currentStep, setCurrentStep] = useState('upload')
 
   const [formData, setFormData] = useState({
     name: '',
     type: 'Pistol',
     caliber: '9mm',
-    category: 'makanan', // API validation expects 'makanan' or 'minuman'
-    difficulty: 'mudah',  // 'mudah' (Standard) | 'sedang' (Service) | 'sulit' (Match)
+    category: 'makanan',
+    difficulty: 'mudah',
     price: 599,
     description: '',
     servings: 1,
     is_featured: false,
   })
 
-  const [imageFile, setImageFile] = useState(null)
-  const [imagePreview, setImagePreview] = useState(null)
-  const [uploadedImageUrl, setUploadedImageUrl] = useState('')
+  // Multi-image state (Challenge 9)
+  const [images, setImages] = useState([])
+  const [uploading, setUploading] = useState(false)
 
-  // Specifications (ingredients in API)
+  // Specs
   const [specs, setSpecs] = useState([
     { name: 'Frame', quantity: 'Polymer' },
     { name: 'Action', quantity: 'Striker-Fired' },
     { name: 'Capacity', quantity: '17 rounds' },
   ])
 
-  // Maintenance / Assembly Steps (steps in API)
+  // Maintenance steps
   const [steps, setSteps] = useState([
-    'Verify firearm is completely unloaded and point in safe direction.',
-    'Disassemble slide assembly from receiver frame for routine maintenance.',
+    'Pastikan senjata benar-benar kosong dari amunisi dan arahkan ke zona aman.',
+    'Bongkar slide assembly dari receiver frame untuk pembersihan rutin.',
   ])
 
-  const [uploading, setUploading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
@@ -72,27 +74,26 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       formData,
       specs,
       steps,
-      uploadedImageUrl,
+      images,
+      savedAt: new Date().toISOString(),
     }
     const saved = saveDraft(draftData, 'create')
     if (saved) {
       const ts = getDraftTimestamp('create')
       setDraftTimestamp(ts)
       if (notify) {
-        setSuccessMsg(`Draft saved (${formatDraftTime(ts)})`)
+        setSuccessMsg(`Draft berhasil disimpan (${formatDraftTime(ts)})`)
         setTimeout(() => setSuccessMsg(''), 3000)
       }
     }
-  }, [formData, specs, steps, uploadedImageUrl])
+  }, [formData, specs, steps, images])
 
-  // Auto-save draft every 30 seconds while in form step
+  // Auto-save every 30s
   useEffect(() => {
     if (currentStep !== 'form') return
-
     const interval = setInterval(() => {
       handleSaveDraft(false)
     }, 30000)
-
     return () => clearInterval(interval)
   }, [handleSaveDraft, currentStep])
 
@@ -102,14 +103,16 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       if (draft.formData) setFormData(draft.formData)
       if (draft.specs) setSpecs(draft.specs)
       if (draft.steps) setSteps(draft.steps)
-      if (draft.uploadedImageUrl) {
-        setUploadedImageUrl(draft.uploadedImageUrl)
-        setImagePreview(draft.uploadedImageUrl)
+      if (draft.images && draft.images.length > 0) {
+        setImages(draft.images)
+        setCurrentStep('form')
+      } else if (draft.uploadedImageUrl) {
+        setImages([draft.uploadedImageUrl])
         setCurrentStep('form')
       }
       setShowDraftModal(false)
-      setSuccessMsg('Draft successfully loaded.')
-      setTimeout(() => setSuccessMsg(''), 4000)
+      setSuccessMsg('Draft berhasil dipulihkan.')
+      setTimeout(() => setSuccessMsg(''), 3000)
     }
   }
 
@@ -119,66 +122,52 @@ export default function CreateGunPage({ onBack, onSuccess }) {
     setDraftTimestamp(null)
   }
 
-  // Handle file selection
-  const handleImageChange = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
+  // Handle multiple file upload
+  const handleMultipleFiles = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File size exceeds 5MB limit.')
-      return
-    }
-
-    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
-    if (!allowed.includes(file.type)) {
-      setError('Allowed formats: .jpg, .jpeg, .png, .webp')
-      return
-    }
-
-    setImageFile(file)
-    setImagePreview(URL.createObjectURL(file))
+    setUploading(true)
     setError('')
+
+    const newUrls = []
+    for (const file of files) {
+      if (file.size > 5 * 1024 * 1024) {
+        setError(`File "${file.name}" melebihi batas 5MB.`)
+        continue
+      }
+      try {
+        const res = await uploadService.uploadImage(file)
+        if (res.success && res.data?.url) {
+          newUrls.push(res.data.url)
+        }
+      } catch (err) {
+        console.warn('Upload error, using fallback:', err)
+      }
+    }
+
+    if (newUrls.length > 0) {
+      setImages((prev) => [...prev, ...newUrls])
+      setSuccessMsg(`${newUrls.length} gambar berhasil ditambahkan.`)
+      setTimeout(() => setSuccessMsg(''), 3000)
+    }
+    setUploading(false)
   }
 
-  // Quick fallback select vector from local assets
-  const handleSelectPreset = (url) => {
-    setImageFile(null)
-    setImagePreview(url)
-    setUploadedImageUrl(url)
-    setCurrentStep('form')
-    setError('')
+  const handleAddPreset = (url) => {
+    setImages((prev) => [...prev, url])
   }
 
-  // Upload image to server
-  const handleUploadImage = async () => {
-    if (!imageFile) {
-      // If user already previewed a preset or entered a url, advance to form
-      if (uploadedImageUrl) {
-        setCurrentStep('form')
-        return
-      }
-      setError('Please select an image file first.')
-      return
-    }
+  const handleRemoveImage = (index) => {
+    setImages((prev) => prev.filter((_, i) => i !== index))
+  }
 
-    try {
-      setUploading(true)
-      setError('')
-      const result = await uploadService.uploadImage(imageFile)
-      if (result.success && result.data?.url) {
-        setUploadedImageUrl(result.data.url)
-        setCurrentStep('form')
-      } else {
-        throw new Error(result.message || 'Image upload failed.')
-      }
-    } catch (err) {
-      console.warn('Upload API failed, falling back to local preview:', err)
-      // Allow fallback to image preview so the user can continue even if MinIO bucket is unreachable
-      setUploadedImageUrl(imagePreview || '/guns/pistol.svg')
-      setCurrentStep('form')
-    } finally {
-      setUploading(false)
-    }
+  const handleSetPrimaryImage = (index) => {
+    setImages((prev) => {
+      const copy = [...prev]
+      const [chosen] = copy.splice(index, 1)
+      return [chosen, ...copy]
+    })
   }
 
   const handleFormChange = (e) => {
@@ -198,10 +187,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
     })
   }
 
-  const addSpec = () => {
-    setSpecs((prev) => [...prev, { name: '', quantity: '' }])
-  }
-
+  const addSpec = () => setSpecs((prev) => [...prev, { name: '', quantity: '' }])
   const removeSpec = (index) => {
     if (specs.length <= 1) return
     setSpecs((prev) => prev.filter((_, i) => i !== index))
@@ -216,22 +202,19 @@ export default function CreateGunPage({ onBack, onSuccess }) {
     })
   }
 
-  const addStep = () => {
-    setSteps((prev) => [...prev, ''])
-  }
-
+  const addStep = () => setSteps((prev) => [...prev, ''])
   const removeStep = (index) => {
     if (steps.length <= 1) return
     setSteps((prev) => prev.filter((_, i) => i !== index))
   }
 
-  // Submit create product
+  // Submit
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
 
     if (!formData.name.trim() || formData.name.trim().length < 3) {
-      setError('Product name must be at least 3 characters.')
+      setError('Nama model senjata minimal 3 karakter.')
       return
     }
 
@@ -243,7 +226,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       }))
 
     if (cleanSpecs.length === 0) {
-      setError('Please provide at least one specification.')
+      setError('Harap isi minimal satu spesifikasi komponen.')
       return
     }
 
@@ -252,18 +235,22 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       .map((s) => s.trim())
 
     if (cleanSteps.length === 0) {
-      setError('Please provide at least one maintenance / assembly step.')
+      setError('Harap isi minimal satu langkah perawatan.')
       return
     }
 
-    // Prepare payload compliant with backend /api/v1/recipes schema
+    const finalImages = images.length > 0 ? images : ['/guns/pistol.svg']
+
     const payload = {
       name: formData.name.trim(),
-      category: formData.category || 'makanan',
+      type: formData.type,
+      category: formData.type === 'Pistol' ? 'makanan' : 'minuman',
       description: formData.description.trim() || `${formData.type} caliber ${formData.caliber}.`,
-      image_url: uploadedImageUrl || '/guns/pistol.svg',
+      images: finalImages,
+      image_url: finalImages[0],
       prep_time: 15,
-      cook_time: Number(formData.price) || 500, // Price stored in cook_time
+      cook_time: Number(formData.price) || 500,
+      price: Number(formData.price) || 500,
       servings: Number(formData.servings) || 1,
       difficulty: formData.difficulty || 'mudah',
       is_featured: Boolean(formData.is_featured),
@@ -276,16 +263,13 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       const response = await gunService.createGun(payload)
       if (response.success || response.data) {
         deleteDraft('create')
-        if (onSuccess) {
-          onSuccess(response.data)
-        } else if (onBack) {
-          onBack()
-        }
+        if (onSuccess) onSuccess(response.data)
+        else if (onBack) onBack()
       } else {
-        throw new Error(response.message || 'Failed to create product.')
+        throw new Error(response.message || 'Gagal mendaftarkan senjata.')
       }
     } catch (err) {
-      setError(err.message || 'Error occurred while saving product to server.')
+      setError(err.message || 'Terjadi kesalahan saat menyimpan ke database.')
     } finally {
       setCreating(false)
     }
@@ -293,10 +277,9 @@ export default function CreateGunPage({ onBack, onSuccess }) {
 
   return (
     <div className="form-page">
-      {/* Header */}
       <div className="form-head">
         <button type="button" className="detail-back" onClick={onBack}>
-          <ArrowLeft size={18} /> Back to Catalog
+          <ArrowLeft size={18} /> Kembali ke Katalog
         </button>
         <div className="form-head-actions">
           {currentStep === 'form' && (
@@ -304,23 +287,22 @@ export default function CreateGunPage({ onBack, onSuccess }) {
               type="button"
               className="btn btn--outline btn--sm"
               onClick={() => handleSaveDraft(true)}
-              title="Save draft"
+              title="Simpan draft"
             >
-              <Save size={14} /> Save Draft
+              <Save size={14} /> Simpan Draft
             </button>
           )}
         </div>
       </div>
 
       <div className="form-title-group">
-        <h1 className="display">Register New Hardware</h1>
+        <h1 className="display">Registrasi Senjata Baru</h1>
         <p className="lede">
-          Add a firearm or accessory to the catalog. Data will be synchronized with the
-          university RESTful backend.
+          Tambahkan senjata ke katalog armory. Anda dapat menambahkan lebih dari 1 gambar
+          dan data akan disinkronkan secara aman.
         </p>
       </div>
 
-      {/* Notifications */}
       {error && (
         <div className="toast toast--error">
           <AlertCircle size={18} /> {error}
@@ -335,108 +317,183 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       {/* Step Indicators */}
       <div className="form-steps-nav">
         <div className={`step-badge ${currentStep === 'upload' ? 'step-badge--active' : 'step-badge--done'}`}>
-          1. Imagery
+          1. Galeri Gambar ({images.length})
         </div>
         <div className="step-badge-connector" />
         <div className={`step-badge ${currentStep === 'form' ? 'step-badge--active' : ''}`}>
-          2. Specifications &amp; Details
+          2. Spesifikasi &amp; Detail
         </div>
       </div>
 
-      {/* STEP 1: Upload Image */}
+      {/* STEP 1: Multiple Images Upload */}
       {currentStep === 'upload' && (
         <div className="card-box">
-          <h2 className="card-box-title">Weapon Imagery</h2>
+          <h2 className="card-box-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Images size={20} color="var(--brass, #c5a059)" />
+            Galeri Gambar Senjata (Dukungan Multi-Gambar)
+          </h2>
           <p className="card-box-desc">
-            Upload an authentic photograph or blueprint (max 5MB), or select an armory preset.
+            Unggah satu atau lebih foto senjata (maks. 5MB per file), atau tambahkan preset stok armory.
           </p>
 
-          {!imagePreview ? (
-            <div className="upload-dropzone">
-              <input
-                id="gun-image-input"
-                type="file"
-                accept="image/jpeg,image/jpg,image/png,image/webp"
-                onChange={handleImageChange}
-                className="hidden-file-input"
-              />
-              <label htmlFor="gun-image-input" className="upload-label">
-                <Upload size={36} className="upload-icon" />
-                <span className="upload-main-text">Click to choose an image file</span>
-                <span className="upload-sub-text">JPG, PNG, or WebP up to 5MB</span>
-              </label>
+          {/* Upload Dropzone */}
+          <div className="upload-dropzone">
+            <input
+              id="gun-multi-input"
+              type="file"
+              multiple
+              accept="image/jpeg,image/jpg,image/png,image/webp"
+              onChange={handleMultipleFiles}
+              className="hidden-file-input"
+              style={{ display: 'none' }}
+            />
+            <label htmlFor="gun-multi-input" className="upload-label" style={{ cursor: 'pointer' }}>
+              <Upload size={36} className="upload-icon" />
+              <span className="upload-main-text">Klik untuk memilih 1 atau lebih file gambar</span>
+              <span className="upload-sub-text">Mendukung format JPG, PNG, WebP (bisa pilih banyak sekaligus)</span>
+            </label>
 
-              <div className="preset-selector">
-                <span className="preset-title">Or use a stock preset:</span>
-                <div className="preset-pills">
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={() => handleSelectPreset('/guns/pistol.svg')}
-                  >
-                    Pistol Vector
-                  </button>
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={() => handleSelectPreset('/guns/rifle.svg')}
-                  >
-                    Rifle Vector
-                  </button>
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={() => handleSelectPreset('/guns/shotgun.svg')}
-                  >
-                    Shotgun Vector
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="preview-container">
-              <div className="preview-image-wrap">
-                <img src={imagePreview} alt="Hardware preview" className="preview-img" />
+            {uploading && (
+              <p style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--brass)' }}>
+                <Loader size={16} className="spin" /> Mengunggah gambar…
+              </p>
+            )}
+
+            <div className="preset-selector" style={{ marginTop: '16px' }}>
+              <span className="preset-title">Atau tambahkan preset vektor:</span>
+              <div className="preset-pills">
                 <button
                   type="button"
-                  className="preview-remove-btn"
-                  onClick={() => {
-                    setImageFile(null)
-                    setImagePreview(null)
-                    setUploadedImageUrl('')
-                  }}
-                  title="Remove image"
+                  className="pill"
+                  onClick={() => handleAddPreset('/guns/pistol.svg')}
                 >
-                  <X size={18} />
+                  + Pistol Vector
+                </button>
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={() => handleAddPreset('/guns/rifle.svg')}
+                >
+                  + Rifle Vector
+                </button>
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={() => handleAddPreset('/guns/shotgun.svg')}
+                >
+                  + Shotgun Vector
                 </button>
               </div>
+            </div>
+          </div>
 
-              <div className="preview-actions">
+          {/* Added Images Thumbnail Grid */}
+          {images.length > 0 && (
+            <div style={{ marginTop: '24px', borderTop: '1px solid var(--line, #2a2a2a)', paddingTop: '18px' }}>
+              <h3 style={{ fontSize: '1rem', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                Foto yang Dipilih ({images.length} gambar):
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '12px' }}>
+                {images.map((imgUrl, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      position: 'relative',
+                      borderRadius: '8px',
+                      overflow: 'hidden',
+                      border: idx === 0 ? '2px solid var(--brass, #c5a059)' : '1px solid var(--line, #333)',
+                      background: 'rgba(0,0,0,0.3)',
+                      height: '110px',
+                    }}
+                  >
+                    <img
+                      src={imgUrl}
+                      alt={`Upload ${idx + 1}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '6px' }}
+                    />
+
+                    {/* Primary Badge */}
+                    {idx === 0 && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '4px',
+                          left: '4px',
+                          background: 'var(--brass, #c5a059)',
+                          color: '#111',
+                          fontSize: '0.65rem',
+                          fontWeight: 700,
+                          padding: '1px 5px',
+                          borderRadius: '3px',
+                        }}
+                      >
+                        Utama
+                      </span>
+                    )}
+
+                    {/* Remove button */}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveImage(idx)}
+                      style={{
+                        position: 'absolute',
+                        top: '4px',
+                        right: '4px',
+                        background: 'rgba(224, 82, 82, 0.85)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: '22px',
+                        height: '22px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                      }}
+                      title="Hapus gambar ini"
+                    >
+                      <X size={13} />
+                    </button>
+
+                    {/* Set Primary Button */}
+                    {idx !== 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleSetPrimaryImage(idx)}
+                        style={{
+                          position: 'absolute',
+                          bottom: '4px',
+                          left: '4px',
+                          right: '4px',
+                          background: 'rgba(0,0,0,0.75)',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '3px',
+                          fontSize: '0.65rem',
+                          padding: '2px 0',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '3px',
+                        }}
+                        title="Jadikan sebagai foto utama"
+                      >
+                        <Star size={10} color="var(--brass)" /> Jadikan Utama
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Continue button */}
+              <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
                 <button
                   type="button"
                   className="btn btn--primary"
-                  onClick={handleUploadImage}
-                  disabled={uploading}
+                  onClick={() => setCurrentStep('form')}
                 >
-                  {uploading ? (
-                    <>
-                      <Loader size={18} className="spin" /> Uploading to MinIO…
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={18} /> Confirm Imagery &amp; Continue
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--outline"
-                  onClick={() => {
-                    setUploadedImageUrl(imagePreview)
-                    setCurrentStep('form')
-                  }}
-                >
-                  Continue without uploading
+                  Lanjut ke Spesifikasi &amp; Detail Senjata &rarr;
                 </button>
               </div>
             </div>
@@ -447,19 +504,30 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       {/* STEP 2: Product Form */}
       {currentStep === 'form' && (
         <form onSubmit={handleSubmit} className="entry-form">
-          {/* Active Image Thumbnail */}
-          <div className="selected-thumb-bar">
-            <img src={uploadedImageUrl || imagePreview} alt="Selected" className="thumb-small" />
-            <div className="thumb-info">
-              <span className="thumb-title">Imagery Assigned</span>
-              <span className="thumb-sub">Ready for registration</span>
+          {/* Active Images Summary Bar */}
+          <div className="selected-thumb-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {images.slice(0, 3).map((img, i) => (
+                  <img
+                    key={i}
+                    src={img}
+                    alt="Thumb"
+                    style={{ width: '40px', height: '40px', objectFit: 'contain', background: 'rgba(0,0,0,0.3)', borderRadius: '4px' }}
+                  />
+                ))}
+              </div>
+              <div className="thumb-info">
+                <span className="thumb-title">{images.length} Gambar Ditetapkan</span>
+                <span className="thumb-sub">Foto utama siap ditampilkan</span>
+              </div>
             </div>
             <button
               type="button"
               className="btn btn--outline btn--sm"
               onClick={() => setCurrentStep('upload')}
             >
-              Change Image
+              Kelola Gambar
             </button>
           </div>
 
@@ -475,7 +543,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                 name="name"
                 value={formData.name}
                 onChange={handleFormChange}
-                placeholder="e.g. Glock 19 Gen 5, Colt M4A1..."
+                placeholder="Contoh: Glock 19 Gen 5, Colt M4A1..."
                 className="form-input"
                 required
               />
@@ -489,14 +557,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                 id="type"
                 name="type"
                 value={formData.type}
-                onChange={(e) => {
-                  handleFormChange(e)
-                  // Map category for backend schema
-                  setFormData((prev) => ({
-                    ...prev,
-                    category: e.target.value === 'Pistol' ? 'makanan' : 'minuman',
-                  }))
-                }}
+                onChange={handleFormChange}
                 className="form-select"
               >
                 <option value="Pistol">Pistol (Sidearm)</option>
@@ -518,7 +579,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                 name="caliber"
                 value={formData.caliber}
                 onChange={handleFormChange}
-                placeholder="e.g. 9mm, 5.56mm, 12 Gauge"
+                placeholder="Contoh: 9mm, 5.56mm, 12 Gauge"
                 className="form-input"
                 required
               />
@@ -526,7 +587,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
 
             <div className="form-group">
               <label htmlFor="price" className="form-label">
-                Price (USD) <span className="req">*</span>
+                Harga (USD) <span className="req">*</span>
               </label>
               <input
                 id="price"
@@ -543,7 +604,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
 
             <div className="form-group">
               <label htmlFor="difficulty" className="form-label">
-                Grade / Build Quality <span className="req">*</span>
+                Kualitas Build <span className="req">*</span>
               </label>
               <select
                 id="difficulty"
@@ -561,29 +622,29 @@ export default function CreateGunPage({ onBack, onSuccess }) {
 
           <div className="form-group">
             <label htmlFor="description" className="form-label">
-              Armory Description
+              Deskripsi Armory
             </label>
             <textarea
               id="description"
               name="description"
               value={formData.description}
               onChange={handleFormChange}
-              placeholder="Operational background, ergonomics, intended mission profile..."
+              placeholder="Profil operasional, ergonomi, catatan armorer..."
               rows={3}
               className="form-textarea"
             />
           </div>
 
-          {/* Specifications (Ingredients) */}
+          {/* Specifications */}
           <div className="form-fieldset">
             <div className="fieldset-header">
-              <label className="form-label">Specifications &amp; Components</label>
+              <label className="form-label">Spesifikasi &amp; Komponen</label>
               <button
                 type="button"
                 className="btn btn--outline btn--sm"
                 onClick={addSpec}
               >
-                <Plus size={14} /> Add Spec
+                <Plus size={14} /> Tambah Spek
               </button>
             </div>
             <div className="multi-rows">
@@ -591,14 +652,14 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                 <div key={i} className="multi-row">
                   <input
                     type="text"
-                    placeholder="Attribute (e.g. Barrel Length, Action)"
+                    placeholder="Atribut (misal: Barrel Length)"
                     value={spec.name}
                     onChange={(e) => handleSpecChange(i, 'name', e.target.value)}
                     className="form-input"
                   />
                   <input
                     type="text"
-                    placeholder="Value (e.g. 16 inch, Striker-fired)"
+                    placeholder="Nilai (misal: 16 inch)"
                     value={spec.quantity}
                     onChange={(e) => handleSpecChange(i, 'quantity', e.target.value)}
                     className="form-input"
@@ -608,7 +669,6 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                     className="btn btn--danger-ghost"
                     onClick={() => removeSpec(i)}
                     disabled={specs.length <= 1}
-                    title="Remove item"
                   >
                     <X size={16} />
                   </button>
@@ -617,16 +677,16 @@ export default function CreateGunPage({ onBack, onSuccess }) {
             </div>
           </div>
 
-          {/* Assembly / Maintenance Steps */}
+          {/* Maintenance steps */}
           <div className="form-fieldset">
             <div className="fieldset-header">
-              <label className="form-label">Assembly &amp; Maintenance Protocol</label>
+              <label className="form-label">Prosedur Perakitan &amp; Perawatan</label>
               <button
                 type="button"
                 className="btn btn--outline btn--sm"
                 onClick={addStep}
               >
-                <Plus size={14} /> Add Step
+                <Plus size={14} /> Tambah Langkah
               </button>
             </div>
             <div className="multi-rows">
@@ -635,7 +695,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                   <span className="step-num">{i + 1}</span>
                   <input
                     type="text"
-                    placeholder="e.g. Clear the chamber and lock slide back..."
+                    placeholder="Langkah perawatan..."
                     value={st}
                     onChange={(e) => handleStepChange(i, e.target.value)}
                     className="form-input"
@@ -645,7 +705,6 @@ export default function CreateGunPage({ onBack, onSuccess }) {
                     className="btn btn--danger-ghost"
                     onClick={() => removeStep(i)}
                     disabled={steps.length <= 1}
-                    title="Remove step"
                   >
                     <X size={16} />
                   </button>
@@ -654,22 +713,6 @@ export default function CreateGunPage({ onBack, onSuccess }) {
             </div>
           </div>
 
-          {/* Featured checkbox */}
-          <div className="checkbox-row">
-            <input
-              id="is_featured"
-              type="checkbox"
-              name="is_featured"
-              checked={formData.is_featured}
-              onChange={handleFormChange}
-              className="form-checkbox"
-            />
-            <label htmlFor="is_featured" className="checkbox-label">
-              Feature in Armory Showcase (Highlight product on catalog)
-            </label>
-          </div>
-
-          {/* Submit bar */}
           <div className="form-actions-bar">
             <button
               type="button"
@@ -677,7 +720,7 @@ export default function CreateGunPage({ onBack, onSuccess }) {
               onClick={onBack}
               disabled={creating}
             >
-              Cancel
+              Batal
             </button>
             <button
               type="submit"
@@ -686,10 +729,10 @@ export default function CreateGunPage({ onBack, onSuccess }) {
             >
               {creating ? (
                 <>
-                  <Loader size={18} className="spin" /> Registering Hardware…
+                  <Loader size={18} className="spin" /> Mendaftarkan Senjata…
                 </>
               ) : (
-                'Commit to Armory'
+                'Simpan ke Katalog Armory'
               )}
             </button>
           </div>
@@ -699,10 +742,10 @@ export default function CreateGunPage({ onBack, onSuccess }) {
       {/* Restore Draft Modal */}
       <ConfirmModal
         open={showDraftModal}
-        title="Resume Previous Draft?"
-        message={`An unfinished draft from ${draftTimestamp ? formatDraftTime(draftTimestamp) : 'earlier'} was detected. Would you like to resume editing?`}
-        confirmLabel="Load Draft"
-        cancelLabel="Discard"
+        title="Lanjutkan Draft Sebelumnya?"
+        message={`Ditemukan draft yang belum tersimpan dari ${draftTimestamp ? formatDraftTime(draftTimestamp) : 'sebelumnya'}. Apakah Anda ingin melanjutkan pengeditan?`}
+        confirmLabel="Muat Draft"
+        cancelLabel="Buang"
         onConfirm={handleLoadDraft}
         onCancel={handleDiscardDraft}
       />

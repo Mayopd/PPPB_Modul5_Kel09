@@ -1,8 +1,10 @@
 import { apiClient, IS_SUPABASE } from '../config/api'
+import queryCache from '../utils/queryCache'
 
 // ---------------------------------------------------------------------------
 // Normalizer — standardizes product shape whether received from Supabase
 // (public.products) or from the university API (/api/v1/recipes).
+// Supports multiple images natively.
 // ---------------------------------------------------------------------------
 export const normalizeProduct = (item) => {
   if (!item) return null
@@ -38,6 +40,34 @@ export const normalizeProduct = (item) => {
       ? item.steps
       : ['Verify firearm is completely unloaded and point in safe direction.', 'Inspect receiver and mechanism for maintenance.']
 
+  // Resolve multiple images
+  let images = []
+  if (Array.isArray(item.images) && item.images.length > 0) {
+    images = item.images
+  } else if (typeof item.image_url === 'string') {
+    const trimmed = item.image_url.trim()
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          images = parsed
+        }
+      } catch {
+        images = [trimmed]
+      }
+    } else if (trimmed) {
+      images = [trimmed]
+    }
+  } else if (typeof item.image === 'string' && item.image) {
+    images = [item.image]
+  }
+
+  if (images.length === 0) {
+    images = ['/guns/pistol.svg']
+  }
+
+  const primaryImage = images[0]
+
   return {
     ...item,
     id: item.id,
@@ -47,8 +77,9 @@ export const normalizeProduct = (item) => {
     caliber: item.caliber || 'Standard',
     price: Number(item.price ?? item.cook_time ?? 0),
     description: item.description || '',
-    image_url: item.image_url || item.image || '/guns/pistol.svg',
-    image: item.image_url || item.image || '/guns/pistol.svg',
+    image_url: primaryImage,
+    image: primaryImage,
+    images: images,
     ingredients: specsList,
     steps: stepsList,
   }
@@ -58,12 +89,19 @@ export const normalizeProduct = (item) => {
 // GunService — wraps backend CRUD endpoints.
 // Supports both Supabase PostgREST table (/rest/v1/products) and
 // standard REST API (/api/v1/recipes).
+// Implements client-side Query Caching with invalidation.
 // ---------------------------------------------------------------------------
 class GunService {
   /**
-   * Fetch a paginated, filterable list of products.
+   * Fetch a paginated, filterable list of products with caching.
    */
-  async getGuns(params = {}) {
+  async getGuns(params = {}, skipCache = false) {
+    const cacheKey = `products_${JSON.stringify(params)}`
+    if (!skipCache) {
+      const cached = queryCache.get(cacheKey)
+      if (cached) return cached
+    }
+
     if (IS_SUPABASE) {
       const queryParts = ['select=*']
 
@@ -90,7 +128,7 @@ class GunService {
       const data = await apiClient.get(`/rest/v1/products?${queryString}`)
       const list = Array.isArray(data) ? data.map(normalizeProduct) : []
 
-      return {
+      const result = {
         success: true,
         data: list,
         pagination: {
@@ -99,33 +137,55 @@ class GunService {
           limit: params.limit || 50,
         },
       }
+      queryCache.set(cacheKey, result, 120000)
+      return result
     }
 
     // Fallback: university REST API
     const clean = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== '' && v != null),
     )
-    return apiClient.get('/api/v1/recipes', { params: clean })
+    const result = await apiClient.get('/api/v1/recipes', { params: clean })
+    queryCache.set(cacheKey, result, 120000)
+    return result
   }
 
   /**
-   * Fetch a single product by ID.
+   * Fetch a single product by ID with caching.
    */
-  async getGunById(id) {
+  async getGunById(id, skipCache = false) {
+    const cacheKey = `product_${id}`
+    if (!skipCache) {
+      const cached = queryCache.get(cacheKey)
+      if (cached) return cached
+    }
+
     if (IS_SUPABASE) {
       const data = await apiClient.get(`/rest/v1/products?id=eq.${id}&select=*`)
       if (Array.isArray(data) && data.length > 0) {
-        return { success: true, data: normalizeProduct(data[0]) }
+        const res = { success: true, data: normalizeProduct(data[0]) }
+        queryCache.set(cacheKey, res, 120000)
+        return res
       }
       throw new Error('Hardware item not found.')
     }
-    return apiClient.get(`/api/v1/recipes/${id}`)
+    const res = await apiClient.get(`/api/v1/recipes/${id}`)
+    queryCache.set(cacheKey, res, 120000)
+    return res
   }
 
   /**
    * Create a new product.
    */
   async createGun(data) {
+    queryCache.invalidate('product')
+
+    // Handle multiple images serialization
+    let imageUrlPayload = data.image_url || null
+    if (Array.isArray(data.images) && data.images.length > 0) {
+      imageUrlPayload = JSON.stringify(data.images)
+    }
+
     if (IS_SUPABASE) {
       const specsArray = Array.isArray(data.ingredients)
         ? data.ingredients.map((i) => `${i.name}: ${i.quantity}`)
@@ -140,7 +200,7 @@ class GunService {
         price: Number(data.price ?? data.cook_time ?? 0),
         description: data.description || '',
         specs: specsArray,
-        image_url: data.image_url || null,
+        image_url: imageUrlPayload,
       }
 
       const res = await apiClient.post('/rest/v1/products', payload, {
@@ -156,6 +216,14 @@ class GunService {
    * Update existing product.
    */
   async updateGun(id, data) {
+    queryCache.invalidate('product')
+
+    // Handle multiple images serialization
+    let imageUrlPayload = data.image_url
+    if (Array.isArray(data.images)) {
+      imageUrlPayload = JSON.stringify(data.images)
+    }
+
     if (IS_SUPABASE) {
       const specsArray = Array.isArray(data.ingredients)
         ? data.ingredients.map((i) => `${i.name}: ${i.quantity}`)
@@ -174,7 +242,7 @@ class GunService {
       }
       if (data.description !== undefined) payload.description = data.description
       if (specsArray !== undefined) payload.specs = specsArray
-      if (data.image_url !== undefined) payload.image_url = data.image_url
+      if (imageUrlPayload !== undefined) payload.image_url = imageUrlPayload
 
       const res = await apiClient.patch(`/rest/v1/products?id=eq.${id}`, payload, {
         headers: { Prefer: 'return=representation' },
@@ -199,6 +267,7 @@ class GunService {
    * Delete product.
    */
   async deleteGun(id) {
+    queryCache.invalidate('product')
     if (IS_SUPABASE) {
       await apiClient.delete(`/rest/v1/products?id=eq.${id}`)
       return { success: true }
