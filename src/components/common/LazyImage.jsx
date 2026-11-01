@@ -1,62 +1,62 @@
-import { useState } from 'react'
+// src/components/common/LazyImage.jsx
+import React, { useState, useEffect, useRef } from 'react';
 
-/**
- * LazyImage — An enhanced lazy-loaded image component with skeleton placeholder
- * and graceful fallback.
- */
 export default function LazyImage({
   src,
-  alt = '',
+  alt,
   className = '',
-  width,
-  height,
-  fallback = '/guns/pistol.svg',
+  fallbackSrc = '/guns/rifle.svg',
   ...props
 }) {
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState(false)
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isInView, setIsInView] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const imgRef = useRef(null);
 
-  const imgSrc = error || !src ? fallback : src
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '100px', threshold: 0.01 }
+    );
+
+    if (imgRef.current) {
+      observer.observe(imgRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div
-      className={`lazy-img-wrapper ${loaded ? 'lazy-img--loaded' : 'lazy-img--loading'}`}
-      style={{ position: 'relative', overflow: 'hidden' }}
-    >
-      {!loaded && !error && (
-        <div
-          className="lazy-img-skeleton"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'linear-gradient(90deg, var(--card, #1c1c1c) 25%, var(--line, #2a2a2a) 50%, var(--card, #1c1c1c) 75%)',
-            backgroundSize: '200% 100%',
-            animation: 'shimmer 1.5s infinite',
+    <div ref={imgRef} className={`relative overflow-hidden bg-slate-800 ${className}`}>
+      {/* Skeleton / Shimmer saat gambar belum selesai dimuat */}
+      {!isLoaded && (
+        <div className="absolute inset-0 bg-slate-700 animate-pulse flex items-center justify-center">
+          <span className="text-xs text-slate-400">Memuat...</span>
+        </div>
+      )}
+
+      {/* Render tag img hanya ketika sudah masuk viewport */}
+      {isInView && (
+        <img
+          src={hasError ? fallbackSrc : src}
+          alt={alt}
+          loading="lazy"
+          onLoad={() => setIsLoaded(true)}
+          onError={() => {
+            setHasError(true);
+            setIsLoaded(true);
           }}
+          className={`w-full h-full object-cover transition-opacity duration-300 ${
+            isLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
+          {...props}
         />
       )}
-      <img
-        src={imgSrc}
-        alt={alt}
-        width={width}
-        height={height}
-        loading="lazy"
-        onLoad={() => setLoaded(true)}
-        onError={() => {
-          setError(true)
-          setLoaded(true)
-        }}
-        className={className}
-        style={{
-          transition: 'opacity 0.3s ease-in-out',
-          opacity: loaded ? 1 : 0,
-          display: 'block',
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
-        }}
-        {...props}
-      />
     </div>
-  )
+  );
 }

@@ -1,121 +1,60 @@
-// ---------------------------------------------------------------------------
-// queryCache.js — In-memory & sessionStorage client-side query caching.
-// Provides instant cache hits and automatic TTL expiration.
-// ---------------------------------------------------------------------------
+// src/utils/queryCache.js
 
 class QueryCache {
-  constructor() {
-    this.memoryCache = new Map()
-    this.prefix = 'bore_barrel_cache_'
+  constructor(defaultTTL = 5 * 60 * 1000) { // Default cache: 5 menit
+    this.cache = new Map();
+    this.defaultTTL = defaultTTL;
   }
 
-  /**
-   * Generate storage key
-   */
-  _getKey(key) {
-    return `${this.prefix}${key}`
+  // Membuat key unik berdasarkan endpoint dan parameter query
+  generateKey(prefix, params = {}) {
+    const sortedParams = Object.keys(params)
+      .sort()
+      .reduce((acc, key) => {
+        if (params[key] !== undefined && params[key] !== '') {
+          acc[key] = params[key];
+        }
+        return acc;
+      }, {});
+    return `${prefix}:${JSON.stringify(sortedParams)}`;
   }
 
-  /**
-   * Retrieve item from cache if not expired.
-   * @param {string} key
-   * @returns {any|null}
-   */
+  // Mengambil data dari cache jika masih valid (belum expired)
   get(key) {
-    const now = Date.now()
+    const cached = this.cache.get(key);
+    if (!cached) return null;
 
-    // 1. Check in-memory cache first
-    if (this.memoryCache.has(key)) {
-      const entry = this.memoryCache.get(key)
-      if (entry.expiresAt > now) {
-        return entry.data
-      }
-      this.memoryCache.delete(key)
+    const isExpired = Date.now() > cached.expiry;
+    if (isExpired) {
+      this.cache.delete(key);
+      return null;
     }
 
-    // 2. Check sessionStorage fallback
-    try {
-      const raw = sessionStorage.getItem(this._getKey(key))
-      if (raw) {
-        const entry = JSON.parse(raw)
-        if (entry.expiresAt > now) {
-          // Re-populate in-memory cache for speed
-          this.memoryCache.set(key, entry)
-          return entry.data
-        }
-        sessionStorage.removeItem(this._getKey(key))
-      }
-    } catch {
-      // sessionStorage unavailable
-    }
-
-    return null
+    return cached.data;
   }
 
-  /**
-   * Set item in cache with a TTL (in milliseconds).
-   * @param {string} key
-   * @param {any} data
-   * @param {number} ttlMs - Default 2 minutes (120,000ms)
-   */
-  set(key, data, ttlMs = 120000) {
-    const entry = {
+  // Menyimpan data ke dalam cache
+  set(key, data, ttl = this.defaultTTL) {
+    this.cache.set(key, {
       data,
-      expiresAt: Date.now() + ttlMs,
-      cachedAt: Date.now(),
-    }
+      expiry: Date.now() + ttl,
+      timestamp: Date.now(),
+    });
+  }
 
-    this.memoryCache.set(key, entry)
-
-    try {
-      sessionStorage.setItem(this._getKey(key), JSON.stringify(entry))
-    } catch {
-      // Storage full or unavailable
+  // Menghapus cache berdasarkan prefix (saat mutasi data)
+  invalidate(prefix) {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
     }
   }
 
-  /**
-   * Invalidate specific key or keys matching a prefix pattern.
-   * @param {string} pattern - Key or prefix, e.g. 'products' or 'reviews'
-   */
-  invalidate(pattern) {
-    // Invalidate in memory
-    for (const key of this.memoryCache.keys()) {
-      if (key.includes(pattern)) {
-        this.memoryCache.delete(key)
-      }
-    }
-
-    // Invalidate in sessionStorage
-    try {
-      const storageKeys = Object.keys(sessionStorage)
-      for (const k of storageKeys) {
-        if (k.startsWith(this.prefix) && k.includes(pattern)) {
-          sessionStorage.removeItem(k)
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  /**
-   * Invalidate all queries
-   */
+  // Menghapus seluruh cache
   clear() {
-    this.memoryCache.clear()
-    try {
-      const storageKeys = Object.keys(sessionStorage)
-      for (const k of storageKeys) {
-        if (k.startsWith(this.prefix)) {
-          sessionStorage.removeItem(k)
-        }
-      }
-    } catch {
-      // ignore
-    }
+    this.cache.clear();
   }
 }
 
-export const queryCache = new QueryCache()
-export default queryCache
+export const queryCache = new QueryCache();
